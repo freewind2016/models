@@ -19,8 +19,8 @@ from __future__ import division
 from __future__ import print_function
 
 import functools
-from absl import logging
-import tensorflow.compat.v2 as tf
+
+import tensorflow as tf
 
 
 class NormActivation(tf.keras.layers.Layer):
@@ -44,7 +44,7 @@ class NormActivation(tf.keras.layers.Layer):
         GraphKeys.TRAINABLE_VARIABLES. If False, freeze batch normalization
         layer.
       init_zero: `bool` if True, initializes scale parameter of batch
-          normalization with 0. If False, initialize it with 1.
+        normalization with 0. If False, initialize it with 1.
       fused: `bool` fused option in batch normalziation.
       use_actiation: `bool`, whether to add the optional activation layer after
         the batch normalization layer.
@@ -105,5 +105,5 @@ def norm_activation_builder(momentum=0.997,
       momentum=momentum,
       epsilon=epsilon,
       trainable=trainable,
-      activation='relu',
+      activation=activation,
       **kwargs)

@@ -24,11 +24,12 @@ from __future__ import print_function
 import os
 import tempfile
 
+# Import libraries
 from absl import app
 from absl import flags
 from absl import logging
 import tensorflow as tf
-
+from official.common import distribute_utils
 from official.modeling import performance
 from official.nlp.transformer import compute_bleu
 from official.nlp.transformer import data_pipeline
@@ -39,7 +40,6 @@ from official.nlp.transformer import transformer
 from official.nlp.transformer import translate
 from official.nlp.transformer.utils import tokenizer
 from official.utils.flags import core as flags_core
-from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 
 INF = int(1e9)
@@ -148,7 +148,7 @@ class TransformerTask(object):
     params["decode_batch_size"] = flags_obj.decode_batch_size
     params["decode_max_length"] = flags_obj.decode_max_length
     params["padded_decode"] = flags_obj.padded_decode
-    params["num_parallel_calls"] = (
+    params["max_io_parallelism"] = (
         flags_obj.num_parallel_calls or tf.data.experimental.AUTOTUNE)
 
     params["use_synthetic_data"] = flags_obj.use_synthetic_data
@@ -159,8 +159,9 @@ class TransformerTask(object):
     params["enable_metrics_in_training"] = flags_obj.enable_metrics_in_training
     params["steps_between_evals"] = flags_obj.steps_between_evals
     params["enable_checkpointing"] = flags_obj.enable_checkpointing
+    params["save_weights_only"] = flags_obj.save_weights_only
 
-    self.distribution_strategy = distribution_utils.get_distribution_strategy(
+    self.distribution_strategy = distribute_utils.get_distribution_strategy(
         distribution_strategy=flags_obj.distribution_strategy,
         num_gpus=num_gpus,
         all_reduce_alg=flags_obj.all_reduce_alg,
@@ -168,8 +169,6 @@ class TransformerTask(object):
         tpu_address=flags_obj.tpu or "")
     if self.use_tpu:
       params["num_replicas"] = self.distribution_strategy.num_replicas_in_sync
-      if not params["static_batch"]:
-        raise ValueError("TPU requires static batch for input data.")
     else:
       logging.info("Running transformer with num_gpus = %d", num_gpus)
 
@@ -198,7 +197,7 @@ class TransformerTask(object):
     keras_utils.set_session_config(enable_xla=flags_obj.enable_xla)
 
     _ensure_dir(flags_obj.model_dir)
-    with distribution_utils.get_strategy_scope(self.distribution_strategy):
+    with distribute_utils.get_strategy_scope(self.distribution_strategy):
       model = transformer.create_model(params, is_train=True)
       opt = self._create_optimizer()
 
@@ -214,10 +213,10 @@ class TransformerTask(object):
         train_loss_metric = tf.keras.metrics.Mean(
             "training_loss", dtype=tf.float32)
         if params["enable_tensorboard"]:
-          summary_writer = tf.compat.v2.summary.create_file_writer(
-              flags_obj.model_dir)
+          summary_writer = tf.summary.create_file_writer(
+              os.path.join(flags_obj.model_dir, "summary"))
         else:
-          summary_writer = tf.compat.v2.summary.create_noop_writer()
+          summary_writer = tf.summary.create_noop_writer()
         train_metrics = [train_loss_metric]
         if params["enable_metrics_in_training"]:
           train_metrics = train_metrics + model.metrics
@@ -239,18 +238,17 @@ class TransformerTask(object):
       train_ds = data_pipeline.train_input_fn(params)
       map_data_fn = data_pipeline.map_data_for_transformer_fn
       train_ds = train_ds.map(
-          map_data_fn, num_parallel_calls=params["num_parallel_calls"])
+          map_data_fn, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     if params["use_ctl"]:
       train_ds_iterator = iter(train_ds)
 
-    callbacks = self._create_callbacks(flags_obj.model_dir, 0, params)
+    callbacks = self._create_callbacks(flags_obj.model_dir, params)
 
     # Only TimeHistory callback is supported for CTL
     if params["use_ctl"]:
       callbacks = [cb for cb in callbacks
                    if isinstance(cb, keras_utils.TimeHistory)]
 
-    # TODO(b/139418525): Refactor the custom training loop logic.
     @tf.function
     def train_steps(iterator, steps):
       """Training steps function for TPU runs.
@@ -324,8 +322,8 @@ class TransformerTask(object):
 
           if params["enable_tensorboard"]:
             for metric_obj in train_metrics:
-              tf.compat.v2.summary.scalar(metric_obj.name, metric_obj.result(),
-                                          current_step)
+              tf.summary.scalar(metric_obj.name, metric_obj.result(),
+                                current_step)
               summary_writer.flush()
 
         for cb in callbacks:
@@ -378,7 +376,7 @@ class TransformerTask(object):
     # We only want to create the model under DS scope for TPU case.
     # When 'distribution_strategy' is None, a no-op DummyContextManager will
     # be used.
-    with distribution_utils.get_strategy_scope(distribution_strategy):
+    with distribute_utils.get_strategy_scope(distribution_strategy):
       if not self.predict_model:
         self.predict_model = transformer.create_model(self.params, False)
       self._load_weights_if_possible(
@@ -410,27 +408,20 @@ class TransformerTask(object):
     for i in range(length):
       translate.translate_from_input(val_outputs[i], subtokenizer)
 
-  def _create_callbacks(self, cur_log_dir, init_steps, params):
+  def _create_callbacks(self, cur_log_dir, params):
     """Creates a list of callbacks."""
-    sfunc = optimizer.LearningRateFn(params["learning_rate"],
-                                     params["hidden_size"],
-                                     params["learning_rate_warmup_steps"])
-    scheduler_callback = optimizer.LearningRateScheduler(sfunc, init_steps)
-    callbacks = misc.get_callbacks(params["steps_between_evals"])
-    callbacks.append(scheduler_callback)
+    callbacks = misc.get_callbacks()
     if params["enable_checkpointing"]:
       ckpt_full_path = os.path.join(cur_log_dir, "cp-{epoch:04d}.ckpt")
       callbacks.append(
           tf.keras.callbacks.ModelCheckpoint(
-              ckpt_full_path, save_weights_only=True))
+              ckpt_full_path, save_weights_only=params["save_weights_only"]))
     return callbacks
 
   def _load_weights_if_possible(self, model, init_weight_path=None):
     """Loads model weights when it is provided."""
     if init_weight_path:
       logging.info("Load weights: {}".format(init_weight_path))
-      # TODO(b/139414977): Having the same variable restoring method for both
-      # TPU and GPU.
       if self.use_tpu:
         checkpoint = tf.train.Checkpoint(
             model=model, optimizer=self._create_optimizer())
@@ -447,7 +438,7 @@ class TransformerTask(object):
         params["learning_rate"], params["hidden_size"],
         params["learning_rate_warmup_steps"])
     opt = tf.keras.optimizers.Adam(
-        lr_schedule if self.use_tpu else params["learning_rate"],
+        lr_schedule,
         params["optimizer_adam_beta1"],
         params["optimizer_adam_beta2"],
         epsilon=params["optimizer_adam_epsilon"])
@@ -470,6 +461,8 @@ def _ensure_dir(log_dir):
 
 def main(_):
   flags_obj = flags.FLAGS
+  if flags_obj.enable_mlir_bridge:
+    tf.config.experimental.enable_mlir_bridge()
   task = TransformerTask(flags_obj)
 
   # Execute flag override logic for better model performance

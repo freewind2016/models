@@ -14,16 +14,9 @@
 # ==============================================================================
 """Keras-based rezero-transformer block layer (Transformer with ReZero)."""
 # pylint: disable=g-classes-have-attributes
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
 
 import gin
 import tensorflow as tf
-
-from official.nlp.modeling.layers import attention
-from official.nlp.modeling.layers import dense_einsum
 
 
 @tf.keras.utils.register_keras_serializable(package="Text")
@@ -42,6 +35,8 @@ class ReZeroTransformer(tf.keras.layers.Layer):
     intermediate_activation: Activation for the intermediate layer.
     dropout_rate: Dropout probability for the post-attention and output dropout.
     attention_dropout_rate: Dropout probability for within the attention layer.
+    output_range: the sequence output range, [0, output_range) by slicing the
+      target sequence. `None` means the target sequence is not sliced.
     kernel_initializer: Initializer for dense layer kernels.
     bias_initializer: Initializer for dense layer biases.
     kernel_regularizer: Regularizer for dense layer kernels.
@@ -58,6 +53,7 @@ class ReZeroTransformer(tf.keras.layers.Layer):
                intermediate_activation,
                dropout_rate=0.0,
                attention_dropout_rate=0.0,
+               output_range=None,
                kernel_initializer="glorot_uniform",
                bias_initializer="zeros",
                kernel_regularizer=None,
@@ -74,6 +70,7 @@ class ReZeroTransformer(tf.keras.layers.Layer):
     self._intermediate_activation = intermediate_activation
     self._attention_dropout_rate = attention_dropout_rate
     self._dropout_rate = dropout_rate
+    self._output_range = output_range
     self._kernel_initializer = tf.keras.initializers.get(kernel_initializer)
     self._bias_initializer = tf.keras.initializers.get(bias_initializer)
     self._kernel_regularizer = tf.keras.regularizers.get(kernel_regularizer)
@@ -85,7 +82,7 @@ class ReZeroTransformer(tf.keras.layers.Layer):
   def build(self, input_shape):
     input_tensor = input_shape[0] if len(input_shape) == 2 else input_shape
     input_tensor_shape = tf.TensorShape(input_tensor)
-    if len(input_tensor_shape) != 3:
+    if len(input_tensor_shape.as_list()) != 3:
       raise ValueError("TransformerLayer expects a three-dimensional input of "
                        "shape [batch, sequence, width].")
     batch_size, sequence_length, hidden_size = input_tensor_shape
@@ -105,19 +102,20 @@ class ReZeroTransformer(tf.keras.layers.Layer):
           "The input size (%d) is not a multiple of the number of attention "
           "heads (%d)" % (hidden_size, self._num_heads))
     self._attention_head_size = int(hidden_size // self._num_heads)
-
-    self._attention_layer = attention.MultiHeadAttention(
-        num_heads=self._num_heads,
-        key_size=self._attention_head_size,
-        dropout_rate=self._attention_dropout_rate,
+    common_kwargs = dict(
         kernel_initializer=self._kernel_initializer,
         bias_initializer=self._bias_initializer,
         kernel_regularizer=self._kernel_regularizer,
         bias_regularizer=self._bias_regularizer,
         activity_regularizer=self._activity_regularizer,
         kernel_constraint=self._kernel_constraint,
-        bias_constraint=self._bias_constraint,
-        name="self_attention")
+        bias_constraint=self._bias_constraint)
+    self._attention_layer = tf.keras.layers.MultiHeadAttention(
+        num_heads=self._num_heads,
+        key_dim=self._attention_head_size,
+        dropout=self._attention_dropout_rate,
+        name="self_attention",
+        **common_kwargs)
     self._attention_dropout = tf.keras.layers.Dropout(rate=self._dropout_rate)
     if self._use_layer_norm:
       # Use float32 in layernorm for numeric stability.
@@ -128,29 +126,26 @@ class ReZeroTransformer(tf.keras.layers.Layer):
               axis=-1,
               epsilon=1e-12,
               dtype=tf.float32))
-    self._intermediate_dense = dense_einsum.DenseEinsum(
-        output_shape=self._intermediate_size,
-        activation=None,
-        kernel_initializer=self._kernel_initializer,
-        bias_initializer=self._bias_initializer,
-        kernel_regularizer=self._kernel_regularizer,
-        bias_regularizer=self._bias_regularizer,
-        activity_regularizer=self._activity_regularizer,
-        kernel_constraint=self._kernel_constraint,
-        bias_constraint=self._bias_constraint,
-        name="intermediate")
+    self._intermediate_dense = tf.keras.layers.experimental.EinsumDense(
+        "abc,cd->abd",
+        output_shape=(None, self._intermediate_size),
+        bias_axes="d",
+        name="intermediate",
+        **common_kwargs)
+    policy = tf.keras.mixed_precision.experimental.global_policy()
+    if policy.name == "mixed_bfloat16":
+      # bfloat16 causes BERT with the LAMB optimizer to not converge
+      # as well, so we use float32.
+      # TODO(b/154538392): Investigate this.
+      policy = tf.float32
     self._intermediate_activation_layer = tf.keras.layers.Activation(
-        self._intermediate_activation)
-    self._output_dense = dense_einsum.DenseEinsum(
-        output_shape=hidden_size,
-        kernel_initializer=self._kernel_initializer,
-        bias_initializer=self._bias_initializer,
-        kernel_regularizer=self._kernel_regularizer,
-        bias_regularizer=self._bias_regularizer,
-        activity_regularizer=self._activity_regularizer,
-        kernel_constraint=self._kernel_constraint,
-        bias_constraint=self._bias_constraint,
-        name="output")
+        self._intermediate_activation, dtype=policy)
+    self._output_dense = tf.keras.layers.experimental.EinsumDense(
+        "abc,cd->abd",
+        output_shape=(None, hidden_size),
+        bias_axes="d",
+        name="output",
+        **common_kwargs)
     self._output_dropout = tf.keras.layers.Dropout(rate=self._dropout_rate)
     if self._use_layer_norm:
       # Use float32 in layernorm for numeric stability.
@@ -160,7 +155,8 @@ class ReZeroTransformer(tf.keras.layers.Layer):
     self._rezero_a = self.add_weight(
         name="rezero_alpha",
         initializer=tf.keras.initializers.Zeros(),
-        trainable=True, dtype=tf.float32)
+        trainable=True,
+        dtype=tf.float32)
 
     super(ReZeroTransformer, self).build(input_shape)
 
@@ -176,6 +172,8 @@ class ReZeroTransformer(tf.keras.layers.Layer):
             self._dropout_rate,
         "attention_dropout_rate":
             self._attention_dropout_rate,
+        "output_range":
+            self._output_range,
         "use_layer_norm":
             self._use_layer_norm,
         "kernel_initializer":
@@ -205,11 +203,16 @@ class ReZeroTransformer(tf.keras.layers.Layer):
     else:
       input_tensor, attention_mask = (inputs, None)
 
-    attention_inputs = [input_tensor, input_tensor]
+    if self._output_range:
+      target_tensor = input_tensor[:, 0:self._output_range, :]
+      attention_mask = attention_mask[:, 0:self._output_range, :]
+    else:
+      target_tensor = input_tensor
 
-    attention_output = self._attention_layer(attention_inputs, attention_mask)
+    attention_output = self._attention_layer(
+        query=target_tensor, value=input_tensor, attention_mask=attention_mask)
     attention_output = self._attention_dropout(attention_output)
-    attention_output = input_tensor + self._rezero_a * attention_output
+    attention_output = target_tensor + self._rezero_a * attention_output
     if self._use_layer_norm:
       attention_output = self._attention_layer_norm(attention_output)
     else:

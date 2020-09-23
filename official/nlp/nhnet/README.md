@@ -39,13 +39,14 @@ First, install the `news-please` CLI (requires python 3.x)
 $ pip3 install news-please
 ```
 
-Next, run the crawler with our provided config and URL list
+Next, run the crawler with our provided [config and URL list](https://github.com/google-research-datasets/NewSHead/releases)
 
 ```shell
-# Sets to path of the downloaded data folder
+# Sets to path of the downloaded data folder.
 $ DATA_FOLDER=/path/to/downloaded_dataset
 
-# Uses CLI interface to crawl
+# Uses CLI interface to crawl. We assume news_please subfolder contains the
+# decompressed config.cfg and sitelist.hjson.
 $ news-please -c $DATA_FOLDER/news_please
 ```
 By default, it will store crawled
@@ -80,7 +81,7 @@ Next, we can run the following data preprocess script which may take a few hours
 
 
 ```shell
-# Recall that we use DATA_FOLDER=/path/to/downloaded_dataset
+# Recall that we use DATA_FOLDER=/path/to/downloaded_dataset.
 $ python3 raw_data_preprocess.py \
     -crawled_articles=/tmp/nhnet \
     -vocab=/path/to/bert_checkpoint/vocab.txt \
@@ -103,14 +104,13 @@ Please first install TensorFlow 2 and Tensorflow Model Garden following the
 ```shell
 $ python3 trainer.py \
     --mode=train_and_eval \
-    --vocab=/path/to/bert_checkpoint/vocab.txt \
     --init_checkpoint=/path/to/bert_checkpoint/bert_model.ckpt \
     --params_override='init_from_bert2bert=false' \
     --train_file_pattern=$DATA_FOLDER/processed/train.tfrecord* \
     --model_dir=/path/to/output/model \
     --len_title=15 \
     --len_passage=200 \
-    --max_num_articles=5 \
+    --num_nhnet_articles=5 \
     --model_type=nhnet \
     --train_batch_size=16 \
     --train_steps=10000 \
@@ -122,14 +122,13 @@ $ python3 trainer.py \
 ```shell
 $ python3 trainer.py \
     --mode=train_and_eval \
-    --vocab=/path/to/bert_checkpoint/vocab.txt \
     --init_checkpoint=/path/to/bert_checkpoint/bert_model.ckpt \
     --params_override='init_from_bert2bert=false' \
     --train_file_pattern=$DATA_FOLDER/processed/train.tfrecord* \
     --model_dir=/path/to/output/model \
     --len_title=15 \
     --len_passage=200 \
-    --max_num_articles=5 \
+    --num_nhnet_articles=5 \
     --model_type=nhnet \
     --train_batch_size=1024 \
     --train_steps=10000 \

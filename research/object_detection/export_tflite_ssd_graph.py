@@ -1,3 +1,4 @@
+# Lint as: python2, python3
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -91,7 +92,7 @@ python object_detection/export_tflite_ssd_graph.py \
        "
 """
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 from google.protobuf import text_format
 from object_detection import export_tflite_ssd_graph_lib
 from object_detection.protos import pipeline_pb2

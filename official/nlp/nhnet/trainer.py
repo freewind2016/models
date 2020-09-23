@@ -21,18 +21,19 @@ from __future__ import print_function
 
 import os
 
+# Import libraries
 from absl import app
 from absl import flags
 from absl import logging
 from six.moves import zip
 import tensorflow as tf
+from official.common import distribute_utils
 from official.modeling.hyperparams import params_dict
 from official.nlp.nhnet import evaluation
 from official.nlp.nhnet import input_pipeline
 from official.nlp.nhnet import models
 from official.nlp.nhnet import optimizer
 from official.nlp.transformer import metrics as transformer_metrics
-from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 
 FLAGS = flags.FLAGS
@@ -60,6 +61,7 @@ def define_flags():
       "Initial checkpoint (usually from a pre-trained BERT model).")
   flags.DEFINE_integer("train_steps", 100000, "Max train steps")
   flags.DEFINE_integer("eval_steps", 32, "Number of eval steps per run.")
+  flags.DEFINE_integer("eval_timeout", 3000, "Timeout waiting for checkpoints.")
   flags.DEFINE_integer("train_batch_size", 32, "Total batch size for training.")
   flags.DEFINE_integer("eval_batch_size", 4, "Total batch size for evaluation.")
   flags.DEFINE_integer(
@@ -83,6 +85,10 @@ def define_flags():
       default=None,
       help=("a YAML/JSON string or a YAML file which specifies additional "
             "overrides over the default parameters"))
+  # Enables MLIR-based TF/XLA bridge. This is part of a soft rollout and will
+  # eventually be the Google-wide default.
+  flags.DEFINE_bool("enable_mlir_bridge", True,
+                    "Use MLIR TF/XLA bridge (experimental).")
 
 
 # pylint: disable=protected-access
@@ -162,17 +168,24 @@ def train(params, strategy, dataset=None):
   # Trains the model.
   steps_per_epoch = min(FLAGS.train_steps, FLAGS.checkpoint_interval)
   epochs = FLAGS.train_steps // steps_per_epoch
-  trainer.fit(
+  history = trainer.fit(
       x=dataset,
       steps_per_epoch=steps_per_epoch,
       epochs=epochs,
       callbacks=[summary_callback, checkpoint_callback],
       verbose=2)
+  train_hist = history.history
+  # Gets final loss from training.
+  stats = dict(training_loss=float(train_hist["training_loss"][-1]))
+  return stats
 
 
 def run():
   """Runs NHNet using Keras APIs."""
-  strategy = distribution_utils.get_distribution_strategy(
+  if FLAGS.enable_mlir_bridge:
+    tf.config.experimental.enable_mlir_bridge()
+
+  strategy = distribute_utils.get_distribution_strategy(
       distribution_strategy=FLAGS.distribution_strategy, tpu_address=FLAGS.tpu)
   if strategy:
     logging.info("***** Number of cores used : %d",
@@ -197,9 +210,9 @@ def run():
       is_strict=False)
   stats = {}
   if "train" in FLAGS.mode:
-    train(params, strategy)
+    stats = train(params, strategy)
   if "eval" in FLAGS.mode:
-    timeout = 0 if FLAGS.mode == "train_and_eval" else 3000
+    timeout = 0 if FLAGS.mode == "train_and_eval" else FLAGS.eval_timeout
     # Uses padded decoding for TPU. Always uses cache.
     padded_decode = isinstance(strategy, tf.distribute.experimental.TPUStrategy)
     params.override({

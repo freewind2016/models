@@ -22,17 +22,17 @@ import json
 import os
 import time
 
+# Import libraries
 from absl import app
 from absl import flags
 from absl import logging
 import gin
 import tensorflow as tf
-
+from official.common import distribute_utils
 from official.nlp.bert import configs as bert_configs
 from official.nlp.bert import run_squad_helper
 from official.nlp.bert import tokenization
 from official.nlp.data import squad_lib as squad_lib_wp
-from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 
 
@@ -49,12 +49,14 @@ def train_squad(strategy,
                 input_meta_data,
                 custom_callbacks=None,
                 run_eagerly=False,
-                init_checkpoint=None):
+                init_checkpoint=None,
+                sub_model_export_name=None):
   """Run bert squad training."""
   bert_config = bert_configs.BertConfig.from_json_file(FLAGS.bert_config_file)
   init_checkpoint = init_checkpoint or FLAGS.init_checkpoint
   run_squad_helper.train_squad(strategy, input_meta_data, bert_config,
-                               custom_callbacks, run_eagerly, init_checkpoint)
+                               custom_callbacks, run_eagerly, init_checkpoint,
+                               sub_model_export_name=sub_model_export_name)
 
 
 def predict_squad(strategy, input_meta_data):
@@ -91,7 +93,6 @@ def export_squad(model_export_path, input_meta_data):
 
 
 def main(_):
-  # Users should always run this script under TF 2.x
   gin.parse_config_files_and_bindings(FLAGS.gin_file, FLAGS.gin_param)
 
   with tf.io.gfile.GFile(FLAGS.input_meta_data_path, 'rb') as reader:
@@ -103,9 +104,8 @@ def main(_):
 
   # Configures cluster spec for multi-worker distribution strategy.
   if FLAGS.num_gpus > 0:
-    _ = distribution_utils.configure_cluster(FLAGS.worker_hosts,
-                                             FLAGS.task_index)
-  strategy = distribution_utils.get_distribution_strategy(
+    _ = distribute_utils.configure_cluster(FLAGS.worker_hosts, FLAGS.task_index)
+  strategy = distribute_utils.get_distribution_strategy(
       distribution_strategy=FLAGS.distribution_strategy,
       num_gpus=FLAGS.num_gpus,
       all_reduce_alg=FLAGS.all_reduce_alg,
@@ -126,6 +126,7 @@ def main(_):
         input_meta_data,
         custom_callbacks=custom_callbacks,
         run_eagerly=FLAGS.run_eagerly,
+        sub_model_export_name=FLAGS.sub_model_export_name,
     )
   if 'predict' in FLAGS.mode:
     predict_squad(strategy, input_meta_data)

@@ -21,11 +21,12 @@ from __future__ import print_function
 import functools
 
 import numpy as np
-import tensorflow.compat.v2 as tf
+import tensorflow as tf
 from official.modeling.hyperparams import params_dict
 
 
-class StepLearningRateWithLinearWarmup(tf.keras.optimizers.schedules.LearningRateSchedule):
+class StepLearningRateWithLinearWarmup(
+    tf.keras.optimizers.schedules.LearningRateSchedule):
   """Class to generate learning rate tensor."""
 
   def __init__(self, total_steps, params):
@@ -57,7 +58,8 @@ class StepLearningRateWithLinearWarmup(tf.keras.optimizers.schedules.LearningRat
     return {'_params': self._params.as_dict()}
 
 
-class CosineLearningRateWithLinearWarmup(tf.keras.optimizers.schedules.LearningRateSchedule):
+class CosineLearningRateWithLinearWarmup(
+    tf.keras.optimizers.schedules.LearningRateSchedule):
   """Class to generate learning rate tensor."""
 
   def __init__(self, total_steps, params):

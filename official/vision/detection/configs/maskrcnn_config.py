@@ -52,7 +52,6 @@ MASKRCNN_CFG.override({
         'anchor_size': 8,
     },
     'rpn_head': {
-        'anchors_per_location': 3,
         'num_convs': 2,
         'num_filters': 256,
         'use_separable_conv': False,
@@ -104,6 +103,9 @@ MASKRCNN_CFG.override({
     },
     'mask_sampling': {
         'num_mask_samples_per_image': 128,  # Typically = `num_samples_per_image` * `fg_fraction`.
+    },
+    'postprocess': {
+        'pre_nms_num_boxes': 1000,
     },
 }, is_strict=False)
 

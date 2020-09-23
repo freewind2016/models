@@ -1,5 +1,7 @@
 # Running on mobile with TensorFlow Lite
 
+[![TensorFlow 1.15](https://img.shields.io/badge/TensorFlow-1.15-FF6F00?logo=tensorflow)](https://github.com/tensorflow/tensorflow/releases/tag/v1.15.0)
+
 In this section, we will show you how to use [TensorFlow
 Lite](https://www.tensorflow.org/mobile/tflite/) to get a smaller model and
 allow you take advantage of ops that have been optimized for mobile devices.
@@ -56,7 +58,7 @@ via the following command. For a quantized model, run this from the tensorflow/
 directory:
 
 ```shell
-bazel run --config=opt tensorflow/lite/toco:toco -- \
+bazel run -c opt tensorflow/lite/toco:toco -- \
 --input_file=$OUTPUT_DIR/tflite_graph.pb \
 --output_file=$OUTPUT_DIR/detect.tflite \
 --input_shapes=1,300,300,3 \
@@ -82,7 +84,7 @@ parameters and can be run via the TensorFlow Lite interpreter on the Android
 device. For a floating point model, run this from the tensorflow/ directory:
 
 ```shell
-bazel run --config=opt tensorflow/lite/toco:toco -- \
+bazel run -c opt tensorflow/lite/toco:toco -- \
 --input_file=$OUTPUT_DIR/tflite_graph.pb \
 --output_file=$OUTPUT_DIR/detect.tflite \
 --input_shapes=1,300,300,3 \

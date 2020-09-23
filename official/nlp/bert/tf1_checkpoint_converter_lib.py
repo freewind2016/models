@@ -111,11 +111,14 @@ def _get_new_shape(name, shape, num_heads):
   return None
 
 
-def create_v2_checkpoint(model, src_checkpoint, output_path):
+def create_v2_checkpoint(model,
+                         src_checkpoint,
+                         output_path,
+                         checkpoint_model_name="model"):
   """Converts a name-based matched TF V1 checkpoint to TF V2 checkpoint."""
   # Uses streaming-restore in eager model to read V1 name-based checkpoints.
   model.load_weights(src_checkpoint).assert_existing_objects_matched()
-  checkpoint = tf.train.Checkpoint(model=model)
+  checkpoint = tf.train.Checkpoint(**{checkpoint_model_name: model})
   checkpoint.save(output_path)
 
 
@@ -164,7 +167,6 @@ def convert(checkpoint_from_path,
         new_shape = _get_new_shape(new_var_name, tensor.shape, num_heads)
       if new_shape:
         tf.logging.info("Veriable %s has a shape change from %s to %s",
-
                         var_name, tensor.shape, new_shape)
         tensor = np.reshape(tensor, new_shape)
 
@@ -188,7 +190,7 @@ def convert(checkpoint_from_path,
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
       tf.logging.info("Writing checkpoint_to_path %s", checkpoint_to_path)
-      saver.save(sess, checkpoint_to_path)
+      saver.save(sess, checkpoint_to_path, write_meta_graph=False)
 
   tf.logging.info("Summary:")
   tf.logging.info("  Converted %d variable name(s).", len(new_variable_map))

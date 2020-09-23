@@ -139,9 +139,9 @@ class RecordingCallback(tf.keras.callbacks.Callback):
 
   def __init__(self):
     self.batch_begin = []  # (batch, logs)
-    self.batch_end = []    # (batch, logs)
+    self.batch_end = []  # (batch, logs)
     self.epoch_begin = []  # (epoch, logs)
-    self.epoch_end = []    # (epoch, logs)
+    self.epoch_end = []  # (epoch, logs)
 
   def on_batch_begin(self, batch, logs=None):
     self.batch_begin.append((batch, logs))
@@ -212,17 +212,19 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
     # Two checkpoints should be saved after two epochs.
     files = map(os.path.basename,
                 tf.io.gfile.glob(os.path.join(model_dir, 'ctl_step_*index')))
-    self.assertCountEqual(['ctl_step_20.ckpt-1.index',
-                           'ctl_step_40.ckpt-2.index'], files)
+    self.assertCountEqual(
+        ['ctl_step_20.ckpt-1.index', 'ctl_step_40.ckpt-2.index'], files)
 
     # Three submodel checkpoints should be saved after two epochs (one after
     # each epoch plus one final).
-    files = map(os.path.basename,
-                tf.io.gfile.glob(os.path.join(model_dir,
-                                              'my_submodel_name*index')))
-    self.assertCountEqual(['my_submodel_name.ckpt-3.index',
-                           'my_submodel_name_step_20.ckpt-1.index',
-                           'my_submodel_name_step_40.ckpt-2.index'], files)
+    files = map(
+        os.path.basename,
+        tf.io.gfile.glob(os.path.join(model_dir, 'my_submodel_name*index')))
+    self.assertCountEqual([
+        'my_submodel_name.ckpt-3.index',
+        'my_submodel_name_step_20.ckpt-1.index',
+        'my_submodel_name_step_40.ckpt-2.index'
+    ], files)
 
     self.assertNotEmpty(
         tf.io.gfile.glob(
@@ -258,6 +260,7 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
         loss_fn=tf.keras.losses.categorical_crossentropy,
         model_dir=model_dir,
         steps_per_epoch=20,
+        num_eval_per_epoch=4,
         steps_per_loop=10,
         epochs=2,
         train_input_fn=input_fn,
@@ -269,14 +272,15 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
         run_eagerly=False)
     self.assertEqual(callback.epoch_begin, [(1, {}), (2, {})])
     epoch_ends, epoch_end_infos = zip(*callback.epoch_end)
-    self.assertEqual(list(epoch_ends), [1, 2])
+    self.assertEqual(list(epoch_ends), [1, 2, 2])
     for info in epoch_end_infos:
       self.assertIn('accuracy', info)
 
-    self.assertEqual(callback.batch_begin,
-                     [(0, {}), (10, {}), (20, {}), (30, {})])
+    self.assertEqual(callback.batch_begin, [(0, {}), (5, {}), (10, {}),
+                                            (15, {}), (20, {}), (25, {}),
+                                            (30, {}), (35, {})])
     batch_ends, batch_end_infos = zip(*callback.batch_end)
-    self.assertEqual(list(batch_ends), [9, 19, 29, 39])
+    self.assertEqual(list(batch_ends), [4, 9, 14, 19, 24, 29, 34, 39])
     for info in batch_end_infos:
       self.assertIn('loss', info)
 

@@ -18,19 +18,19 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import tensorflow.compat.v2 as tf
+import tensorflow as tf
 
-from tensorflow.python.keras import backend
 from official.vision.detection.dataloader import anchor
 from official.vision.detection.dataloader import mode_keys
 from official.vision.detection.evaluation import factory as eval_factory
 from official.vision.detection.modeling import base_model
 from official.vision.detection.modeling import losses
 from official.vision.detection.modeling.architecture import factory
+from official.vision.detection.modeling.architecture import keras_utils
 from official.vision.detection.ops import postprocess_ops
 from official.vision.detection.ops import roi_ops
-from official.vision.detection.ops import sampling_ops
 from official.vision.detection.ops import spatial_transform_ops
+from official.vision.detection.ops import target_ops
 from official.vision.detection.utils import box_utils
 
 
@@ -51,8 +51,8 @@ class MaskrcnnModel(base_model.Model):
     self._fpn_fn = factory.multilevel_features_generator(params)
     self._rpn_head_fn = factory.rpn_head_generator(params)
     self._generate_rois_fn = roi_ops.ROIGenerator(params.roi_proposal)
-    self._sample_rois_fn = sampling_ops.ROISampler(params.roi_sampling)
-    self._sample_masks_fn = sampling_ops.MaskSampler(
+    self._sample_rois_fn = target_ops.ROISampler(params.roi_sampling)
+    self._sample_masks_fn = target_ops.MaskSampler(
         params.architecture.mask_target_size,
         params.mask_sampling.num_mask_samples_per_image)
 
@@ -118,9 +118,7 @@ class MaskrcnnModel(base_model.Model):
       box_targets = tf.where(
           tf.tile(
               tf.expand_dims(tf.equal(matched_gt_classes, 0), axis=-1),
-              [1, 1, 4]),
-          tf.zeros_like(box_targets),
-          box_targets)
+              [1, 1, 4]), tf.zeros_like(box_targets), box_targets)
       model_outputs.update({
           'class_targets': matched_gt_classes,
           'box_targets': box_targets,
@@ -183,9 +181,7 @@ class MaskrcnnModel(base_model.Model):
                                     mask_outputs),
       })
     else:
-      model_outputs.update({
-          'detection_masks': tf.nn.sigmoid(mask_outputs)
-      })
+      model_outputs.update({'detection_masks': tf.nn.sigmoid(mask_outputs)})
 
     return model_outputs
 
@@ -297,7 +293,7 @@ class MaskrcnnModel(base_model.Model):
   def build_model(self, params, mode):
     if self._keras_model is None:
       input_layers = self.build_input_layers(self._params, mode)
-      with backend.get_graph().as_default():
+      with keras_utils.maybe_enter_backend_graph():
         outputs = self.model_outputs(input_layers, mode)
 
         model = tf.keras.models.Model(
@@ -312,8 +308,8 @@ class MaskrcnnModel(base_model.Model):
     required_output_fields = ['class_outputs', 'box_outputs']
     for field in required_output_fields:
       if field not in outputs:
-        raise ValueError('"%s" is missing in outputs, requried %s found %s'
-                         %(field, required_output_fields, outputs.keys()))
+        raise ValueError('"%s" is missing in outputs, requried %s found %s' %
+                         (field, required_output_fields, outputs.keys()))
     predictions = {
         'image_info': labels['image_info'],
         'num_detections': outputs['num_detections'],
